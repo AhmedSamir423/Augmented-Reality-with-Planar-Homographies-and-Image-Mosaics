@@ -206,37 +206,49 @@ plt.show()
 # =====================================
 # 7. Mosaic Creation
 # =====================================
-def create_mosaic(img1, img2, H):
-    """Create mosaic by warping img1 into img2’s coordinate frame."""
-    h2, w2 = img2.shape[:2]
-    h1, w1 = img1.shape[:2]
+def create_mosaic(img_fixed, warped_img, offset):
+    # Convert offsets to integer pixel values
+    ox, oy = offset
+    ox = int(round(ox))
+    oy = int(round(oy))
 
-    # Corners of img1
-    corners_img1 = np.float32([[0, 0], [0, h1], [w1, h1], [w1, 0]]).reshape(-1, 1, 2)
-    warped_corners = cv2.perspectiveTransform(corners_img1, H)
+    hF, wF = img_fixed.shape[:2]
+    hW, wW = warped_img.shape[:2]
 
-    # Combine corners of both images
-    corners_img2 = np.float32([[0, 0], [0, h2], [w2, h2], [w2, 0]]).reshape(-1, 1, 2)
-    all_corners = np.concatenate((warped_corners, corners_img2), axis=0)
+    # Compute canvas bounds
+    min_x = min(0, ox)
+    min_y = min(0, oy)
+    max_x = max(wF, ox + wW)
+    max_y = max(hF, oy + hW)
 
-    [xmin, ymin] = np.int32(all_corners.min(axis=0).ravel() - 0.5)
-    [xmax, ymax] = np.int32(all_corners.max(axis=0).ravel() + 0.5)
+    new_w = int(max_x - min_x)
+    new_h = int(max_y - min_y)
 
-    translation = [-xmin, -ymin]
-    T = np.array([[1, 0, translation[0]], [0, 1, translation[1]], [0, 0, 1]])
+    # Shift values so everything fits in positive index space
+    shift_x = int(-min_x)
+    shift_y = int(-min_y)
 
-    # Warp img1 into mosaic
-    mosaic_w, mosaic_h = xmax - xmin, ymax - ymin
-    img1_warped = cv2.warpPerspective(img1, T @ H, (mosaic_w, mosaic_h))
+    # Create mosaic canvas
+    mosaic = np.zeros((new_h, new_w, 3), dtype=img_fixed.dtype)
 
-    # Overlay img2
-    mosaic = img1_warped.copy()
-    mosaic[translation[1]:translation[1]+h2, translation[0]:translation[0]+w2] = img2
+    
+
+    # Place warped image (img1 warped into img2 coordinates)
+    for y in range(hW):
+        for x in range(wW):
+            px = warped_img[y, x]
+            if not np.all(px == 0):  # skip black/empty regions
+                mosaic[oy + y + shift_y, ox + x + shift_x] = px
+
+    # Place fixed image (img2)
+    mosaic[shift_y:shift_y + hF, shift_x:shift_x + wF] = img_fixed
 
     return mosaic
 
 
-mosaic = create_mosaic(img1, img2, H_manual)
+
+
+mosaic = create_mosaic(img2, warped_img, offset)
 cv2.imwrite("03_mosaic.jpg", mosaic)
 
 plt.figure(figsize=(14, 8))
