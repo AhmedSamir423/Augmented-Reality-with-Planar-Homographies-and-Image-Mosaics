@@ -29,15 +29,84 @@ def get_sift_matches(img1, img2):
     return good, kp1, kp2
 
 
-def compute_homography_ransac(pts_src, pts_dst):
-   
-    if len(pts_src) < 4:
-        return None, None
-    H, mask = cv2.findHomography(pts_src, pts_dst,
-                                method=cv2.RANSAC,
-                                ransacReprojThreshold=5.0)
-    return H, mask
+def dlt_homography(pts_src, pts_dst):
+    
+    n = len(pts_src)
+    if n < 4:
+        return None
+    
+    # Build the 2n x 9 matrix A
+    A = np.zeros((2 * n, 9))
+    for i in range(n):
+        x, y = pts_src[i]
+        xp, yp = pts_dst[i]
+        # Row for x' equation
+        A[2 * i] = [x, y, 1, 0, 0, 0, -xp * x, -xp * y, -xp]
+        # Row for y' equation
+        A[2 * i + 1] = [0, 0, 0, x, y, 1, -yp * x, -yp * y, -yp]
+    
+    # Solve Ax = 0 using SVD: 
+    U, S, Vt = np.linalg.svd(A)
+    H = Vt[-1].reshape(3, 3)
+    
+    # Normalize: H[2,2] = 1
+    H /= H[2, 2]
+    return H
 
+
+def ransac_homography(pts_src, pts_dst, threshold=5.0, max_iter=1000):
+
+    n = len(pts_src)
+    if n < 4:
+        return None, None
+    
+    best_H = None
+    best_inliers = 0
+    best_mask = np.zeros(n, dtype=np.uint8)
+    
+    for _ in range(max_iter):
+        # Randomly select 4 points (no replacement)
+        idx = np.random.choice(n, 4, replace=False)
+        src4 = pts_src[idx]
+        dst4 = pts_dst[idx]
+        
+        # Compute H from 4 points
+        H4 = dlt_homography(src4, dst4)
+        if H4 is None:
+            continue
+        
+        # Count inliers
+        inliers_count = 0
+        temp_mask = np.zeros(n, dtype=np.uint8)
+        for i in range(n):
+            # Project point
+            p_hom = np.array([pts_src[i][0], pts_src[i][1], 1])
+            p_proj = H4 @ p_hom
+            p_proj = p_proj[:2] / p_proj[2]  # dehomogenize
+            error = np.linalg.norm(p_proj - pts_dst[i])  # reprojection error
+            if error < threshold:
+                inliers_count += 1
+                temp_mask[i] = 1
+        
+        # Update best
+        if inliers_count > best_inliers:
+            best_inliers = inliers_count
+            best_H = H4.copy()
+            best_mask = temp_mask.copy()
+    
+    if best_inliers < 4:
+        return None, None
+    
+    
+    inlier_idx = np.where(best_mask == 1)[0]
+    final_H = dlt_homography(pts_src[inlier_idx], pts_dst[inlier_idx])
+    
+    return final_H, best_mask
+
+
+
+def compute_homography_ransac(pts_src, pts_dst):  
+    return ransac_homography(pts_src, pts_dst, threshold=5.0, max_iter=1000)
 
 def crop_center_to_aspect(frame, target_aspect, target_w, target_h):
     
@@ -107,6 +176,8 @@ if not cap_book.isOpened() or not cap_ar.isOpened():
 ret, first_book = cap_book.read()
 if not ret:
     raise RuntimeError("book.mov is empty")
+
+# SIFT MATCHES
 print("1.1 – Computing SIFT matches on first frame …")
 good_matches, kp_cover, kp_first = get_sift_matches(cover, first_book)
 
